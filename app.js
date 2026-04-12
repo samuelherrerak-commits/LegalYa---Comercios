@@ -1,3 +1,16 @@
+// Configuración de tu proyecto Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyDIqpQ1wl1R-0UqzLMY5Aezi2pwe5g05D4",
+  authDomain: "legalya-comercios.firebaseapp.com",
+  projectId: "legalya-comercios",
+  storageBucket: "legalya-comercios.firebasestorage.app",
+  messagingSenderId: "697667245218",
+  appId: "1:697667245218:web:1ef1fb2e38a0ee95b0f3fb"
+};
+
+// Iniciar Firebase y la Base de Datos
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 const { useState, useMemo, useEffect, createContext, useContext } = React;
 
 // ==========================================
