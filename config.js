@@ -24,6 +24,14 @@ const USUARIOS = [
         nombreEmpresa: "COMERCIAL DEMO",
         rif: "J-00000000",
         colorTema: "emerald"
+    },
+    {
+        usuario: "Rosa",
+        clave: "melano",
+        rol: "USER",
+        nombreEmpresa: "Floristeria RosaMelano",
+        rif: "J-00000000",
+        colorTema: "blue"
     }
 ];
 
