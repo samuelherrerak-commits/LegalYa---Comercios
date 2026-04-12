@@ -1,4 +1,6 @@
-// Configuración de tu proyecto Firebase
+// ==========================================
+// 1. CONFIGURACIÓN E INICIALIZACIÓN DE FIREBASE
+// ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyDIqpQ1wl1R-0UqzLMY5Aezi2pwe5g05D4",
   authDomain: "legalya-comercios.firebaseapp.com",
@@ -8,75 +10,21 @@ const firebaseConfig = {
   appId: "1:697667245218:web:1ef1fb2e38a0ee95b0f3fb"
 };
 
-// Iniciar Firebase y la Base de Datos
-firebase.initializeApp(firebaseConfig);
+// Iniciar Firebase
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
 const db = firebase.firestore();
+
+// Habilitar Modo Offline (Persistencia)
+db.enablePersistence().catch((err) => {
+    console.warn("Modo offline no disponible:", err.code);
+});
+
 const { useState, useMemo, useEffect, createContext, useContext } = React;
 
 // ==========================================
-// CONSTANTES Y ALIAS CONTABLES
-// ==========================================
-const fallbackCuentas = {
-    CAJA_USD: '1.1.01.01', CAJA_BS: '1.1.01.02', BANCOS: '1.1.01.03',
-    CXC: '1.1.02.01', INVENTARIO: '1.1.03.01', CXP: '2.1.01.01',
-    VENTAS: '4.1.01.01', DIF_CAMB: '4.1.03.01', COSTO_VTA: '5.1.01.01'
-};
-
-const CTA = typeof window !== 'undefined' && window.CUENTAS ? window.CUENTAS : fallbackCuentas;
-const NOMBRE_EMPRESA = typeof window !== 'undefined' && window.EMPRESA ? window.EMPRESA.NOMBRE : 'INVERSIONES KEYDAN';
-const RIF_EMPRESA = typeof window !== 'undefined' && window.EMPRESA ? window.EMPRESA.RIF : 'J30580323';
-
-// ==========================================
-// COMPONENTES DE INTERFAZ Y UTILIDADES
-// ==========================================
-const Icon = ({ name, size = 20, className = "" }) => {
-    useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
-    return <i data-lucide={name.toLowerCase()} style={{ width: size, height: size }} className={className}></i>;
-};
-
-const MenuButton = ({ onClick, label, icon, color }) => (
-    <button onClick={onClick} className={`p-4 rounded-[2rem] flex flex-col items-center justify-center gap-2 shadow-sm hover:scale-105 transition-all ${color}`}>
-        <Icon name={icon} size={24} />
-        <span className="font-black uppercase text-[9px] tracking-wider text-center">{label}</span>
-    </button>
-);
-
-const StatCard = ({ label, val, icon, color, bg }) => (
-    <div className={`${bg} p-6 rounded-[2rem] flex flex-col gap-3 border border-white/50 shadow-sm`}>
-        <div className={`p-3 rounded-2xl ${color} bg-white shadow-sm w-max`}><Icon name={icon} size={20} /></div>
-        <div>
-            <p className="text-[10px] font-black uppercase text-slate-500">{label}</p>
-            <p className={`text-xl font-black ${color}`}>{val}</p>
-        </div>
-    </div>
-);
-
-const InputField = ({ label, icon, color, value, onChange }) => (
-    <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-3xl border-2 border-transparent focus-within:border-slate-200 transition-all">
-        <div className={`${color} text-white p-3 rounded-2xl shadow-sm`}><Icon name={icon}/></div>
-        <div className="flex-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase">{label}</p>
-            <input type="number" placeholder="0.00" className="w-full bg-transparent text-xl font-black outline-none" value={value} onChange={e => onChange(e.target.value)} />
-        </div>
-    </div>
-);
-
-const ResultRow = ({ label, system, diff, isUsd = false }) => (
-    <div className="flex justify-between items-center border-b border-white/5 pb-4">
-        <div>
-            <p className="text-[10px] font-bold text-slate-500 uppercase">{label}</p>
-            <p className="text-xs opacity-50">Sistema: {isUsd ? '$' : ''}{system.toFixed(2)}</p>
-        </div>
-        <div className="text-right">
-            <p className={`text-lg font-black ${diff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {diff >= 0 ? '+' : ''}{diff.toFixed(2)} {isUsd ? '$' : 'Bs'}
-            </p>
-        </div>
-    </div>
-);
-
-// ==========================================
-// CONTEXTO Y PROVEEDOR GLOBAL
+// 2. CONTEXTO GLOBAL Y LÓGICA DE NEGOCIO
 // ==========================================
 const AppContext = createContext();
 
@@ -147,6 +95,137 @@ const AppProvider = ({ children }) => {
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 };
+
+
+    // Sincronización en tiempo real con Firebase
+    useEffect(() => {
+        const unsub = db.collection("movimientos")
+            .orderBy("timestamp", "desc")
+            .onSnapshot((snapshot) => { 
+                const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setMovimientos(docs);
+            });
+        return () => unsub();
+    }, []);
+
+    // FUNCIÓN MAESTRA: REGISTRAR EN LAS 16 COLUMNAS
+    const registrarMovimiento = async (data) => {
+        const ahora = new Date();
+        const montoUsd = parseFloat(data.montoUsd || 0);
+        const montoBs = parseFloat(data.montoBs || (montoUsd * tasa));
+
+        const fila16Columnas = {
+            col01_fecha: ahora.toLocaleDateString(),
+            col02_hora: ahora.toLocaleTimeString(),
+            col03_empresa: currentUser?.empresa || "LegalYa",
+            col04_usuario: currentUser?.nombre || "Admin",
+            col05_tipo_movimiento: data.tipo, // VENTA, COMPRA, GASTO, COBRANZA
+            col06_descripcion: data.descripcion || "Sin descripción",
+            col07_monto_usd: montoUsd,
+            col08_tasa: parseFloat(tasa),
+            col09_monto_bs: montoBs,
+            col10_metodo_pago: data.metodo || "Efectivo",
+            col11_referencia: data.referencia || "N/A",
+            col12_cliente_proveedor: data.entidad || "General",
+            col13_estatus: "Completado",
+            col14_categoria: data.categoria || "Operativo",
+            col15_observaciones: data.observaciones || "",
+            col16_id_movimiento: `LY-${Date.now()}`,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        try {
+            await db.collection("movimientos").add(fila16Columnas);
+            return { success: true };
+        } catch (error) {
+            console.error("Error Firebase:", error);
+            return { success: false };
+        }
+    };
+
+    const login = (user, pass) => {
+        if (user === "Samuel" && pass === "1234") {
+            setCurrentUser({ nombre: "Samuel", empresa: "LegalYa Comercios" });
+            return true;
+        }
+        return false;
+    };
+
+    return (
+        <AppContext.Provider value={{ 
+            isInit, setIsInit, currentUser, setCurrentUser, tasa, setTasa, 
+            movimientos, registrarMovimiento, login 
+        }}>
+            {children}
+        </AppContext.Provider>
+    );
+
+// ==========================================
+// CONSTANTES Y ALIAS CONTABLES
+// ==========================================
+const fallbackCuentas = {
+    CAJA_USD: '1.1.01.01', CAJA_BS: '1.1.01.02', BANCOS: '1.1.01.03',
+    CXC: '1.1.02.01', INVENTARIO: '1.1.03.01', CXP: '2.1.01.01',
+    VENTAS: '4.1.01.01', DIF_CAMB: '4.1.03.01', COSTO_VTA: '5.1.01.01'
+};
+
+const CTA = typeof window !== 'undefined' && window.CUENTAS ? window.CUENTAS : fallbackCuentas;
+const NOMBRE_EMPRESA = typeof window !== 'undefined' && window.EMPRESA ? window.EMPRESA.NOMBRE : 'INVERSIONES KEYDAN';
+const RIF_EMPRESA = typeof window !== 'undefined' && window.EMPRESA ? window.EMPRESA.RIF : 'J30580323';
+
+// ==========================================
+// COMPONENTES DE INTERFAZ Y UTILIDADES
+// ==========================================
+const Icon = ({ name, size = 20, className = "" }) => {
+    useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+    return <i data-lucide={name.toLowerCase()} style={{ width: size, height: size }} className={className}></i>;
+};
+
+const MenuButton = ({ onClick, label, icon, color }) => (
+    <button onClick={onClick} className={`p-4 rounded-[2rem] flex flex-col items-center justify-center gap-2 shadow-sm hover:scale-105 transition-all ${color}`}>
+        <Icon name={icon} size={24} />
+        <span className="font-black uppercase text-[9px] tracking-wider text-center">{label}</span>
+    </button>
+);
+
+const StatCard = ({ label, val, icon, color, bg }) => (
+    <div className={`${bg} p-6 rounded-[2rem] flex flex-col gap-3 border border-white/50 shadow-sm`}>
+        <div className={`p-3 rounded-2xl ${color} bg-white shadow-sm w-max`}><Icon name={icon} size={20} /></div>
+        <div>
+            <p className="text-[10px] font-black uppercase text-slate-500">{label}</p>
+            <p className={`text-xl font-black ${color}`}>{val}</p>
+        </div>
+    </div>
+);
+
+const InputField = ({ label, icon, color, value, onChange }) => (
+    <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-3xl border-2 border-transparent focus-within:border-slate-200 transition-all">
+        <div className={`${color} text-white p-3 rounded-2xl shadow-sm`}><Icon name={icon}/></div>
+        <div className="flex-1">
+            <p className="text-[10px] font-black text-slate-400 uppercase">{label}</p>
+            <input type="number" placeholder="0.00" className="w-full bg-transparent text-xl font-black outline-none" value={value} onChange={e => onChange(e.target.value)} />
+        </div>
+    </div>
+);
+
+const ResultRow = ({ label, system, diff, isUsd = false }) => (
+    <div className="flex justify-between items-center border-b border-white/5 pb-4">
+        <div>
+            <p className="text-[10px] font-bold text-slate-500 uppercase">{label}</p>
+            <p className="text-xs opacity-50">Sistema: {isUsd ? '$' : ''}{system.toFixed(2)}</p>
+        </div>
+        <div className="text-right">
+            <p className={`text-lg font-black ${diff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {diff >= 0 ? '+' : ''}{diff.toFixed(2)} {isUsd ? '$' : 'Bs'}
+            </p>
+        </div>
+    </div>
+);
+
+// ==========================================
+// CONTEXTO Y PROVEEDOR GLOBAL
+// ==========================================
+
 
 // ==========================================
 // PANTALLAS DE ACCESO Y CONFIGURACIÓN INICIAL
