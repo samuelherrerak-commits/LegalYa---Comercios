@@ -1517,6 +1517,16 @@ const App = () => {
 
     return (
         <div className="max-w-[1400px] mx-auto p-4 md:p-10 font-sans">
+        {/* BOTON GLOBAL PARA DEVOLVERSE */}
+            {view !== 'dashboard' && (
+                <button 
+                    onClick={() => setView('dashboard')} 
+                    className="mb-6 flex items-center gap-2 font-black uppercase text-sm text-slate-500 hover:text-blue-600 bg-white px-5 py-3 rounded-2xl shadow-sm border border-slate-100 transition-all"
+                >
+                    <Icon name="ArrowLeft" size={20} /> Volver al Menú Principal
+                </button>
+            )}
+            {/* FIN DEL BOTON */}
             {view === 'dashboard' && <Dashboard setView={setView} />}
             {view === 'pos' && <POSModule onBack={() => setView('dashboard')} />}
             {view === 'purchase' && <ReceptionModule onBack={() => setView('dashboard')} />}
