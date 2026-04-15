@@ -1,5 +1,7 @@
+const { useState, useMemo, useEffect, createContext, useContext } = React;
+
 // ==========================================
-// 1. CONFIGURACIÓN E INICIALIZACIÓN DE FIREBASE
+// 1. CONFIGURACIÓN DE FIREBASE (NUBE)
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyDIqpQ1wl1R-0UqzLMY5Aezi2pwe5g05D4",
@@ -10,155 +12,10 @@ const firebaseConfig = {
   appId: "1:697667245218:web:1ef1fb2e38a0ee95b0f3fb"
 };
 
-// Iniciar Firebase
-if (!firebase.apps.length) {
+if (typeof firebase !== 'undefined' && !firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
 }
-const db = firebase.firestore();
-
-// Habilitar Modo Offline (Persistencia)
-db.enablePersistence().catch((err) => {
-    console.warn("Modo offline no disponible:", err.code);
-});
-
-const { useState, useMemo, useEffect, createContext, useContext } = React;
-
-// ==========================================
-// 2. CONTEXTO GLOBAL Y LÓGICA DE NEGOCIO
-// ==========================================
-const AppContext = createContext();
-
-const AppProvider = ({ children }) => {
-    const getSaved = (key, fallback) => {
-        try {
-            const item = localStorage.getItem(key);
-            return item ? JSON.parse(item) : fallback;
-        } catch (e) { return fallback; }
-    };
-
-    const [isInit, setIsInit] = useState(() => localStorage.getItem('legaly_init') === 'true');
-    const [tasaBCV, setTasaBCV] = useState(() => parseFloat(localStorage.getItem('legaly_tasa')) || 0);
-    const [currentUser, setCurrentUser] = useState(() => getSaved('legaly_user', null));
-    const [journal, setJournal] = useState(() => getSaved('legaly_journal', []));
-    const [contacts, setContacts] = useState(() => getSaved('legaly_contacts', []));
-    const [isLocked, setIsLocked] = useState(() => localStorage.getItem('legaly_locked') === 'true');
-    const [inventory, setInventory] = useState([]);
-
-    useEffect(() => {
-        localStorage.setItem('legaly_init', isInit);
-        localStorage.setItem('legaly_tasa', tasaBCV.toString());
-        localStorage.setItem('legaly_user', JSON.stringify(currentUser));
-        localStorage.setItem('legaly_journal', JSON.stringify(journal));
-        localStorage.setItem('legaly_contacts', JSON.stringify(contacts));
-        localStorage.setItem('legaly_locked', isLocked);
-    }, [isInit, tasaBCV, currentUser, journal, contacts, isLocked]);
-
-    const updateInventory = (rows) => {
-        const stockMap = {};
-        rows.forEach(row => {
-            const cuenta = String(row.Cuenta || '').trim();
-            const conceptoStr = String(row.Concepto || '').toUpperCase();
-            
-            if (cuenta === CTA.INVENTARIO && conceptoStr) {
-                let name = conceptoStr.split('|')[0].replace(/^(ENTRADA|SALIDA|RECEPCION|VENTA|COMPRA|COSTO VENTA|COSTO)\s*:?\s*/i, '').trim();
-                let qty = parseFloat(row.Cantidad) || 0;
-                
-                if (qty === 0) {
-                    const match = conceptoStr.match(/Cant:\s*([\d.]+)/i) || conceptoStr.match(/de\s*([\d.]+)\s*(kg|unidades)/i);
-                    if (match) qty = parseFloat(match[1]);
-                }
-                
-                if (!name || name === 'ASIENTO DE APERTURA') return;
-                
-                if (!stockMap[name]) stockMap[name] = { name, stock: 0, unit: row.Unidad_Medida || 'und', cost: 0, sellPrice: parseFloat(row.Precio_Venta) || 0 };
-                
-                if (row.Debe > 0) { stockMap[name].stock += qty; if(qty > 0) stockMap[name].cost = (row.Debe / qty); }
-                if (row.Haber > 0) stockMap[name].stock -= qty;
-                if (parseFloat(row.Precio_Venta) > 0) stockMap[name].sellPrice = parseFloat(row.Precio_Venta);
-            }
-        });
-        return Object.values(stockMap).map(p => ({ ...p, id: `p-${p.name}` }));
-    };
-
-    useEffect(() => { setInventory(updateInventory(journal)); }, [journal]);
-
-    const addTransaction = (newRows) => {
-        if (isLocked) return alert("SISTEMA BLOQUEADO. Descargue el libro diario e inicie un nuevo ciclo.");
-        setJournal(prev => [...prev, ...newRows]);
-    };
-
-    const value = { 
-        isInit, setIsInit, tasaBCV, setTasaBCV, currentUser, setCurrentUser, 
-        journal, setJournal, contacts, setContacts, isLocked, setIsLocked, 
-        inventory, setInventory, addTransaction, updateInventory 
-    };
-
-    return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-};
-
-
-    // Sincronización en tiempo real con Firebase
-    useEffect(() => {
-        const unsub = db.collection("movimientos")
-            .orderBy("timestamp", "desc")
-            .onSnapshot((snapshot) => { 
-                const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setMovimientos(docs);
-            });
-        return () => unsub();
-    }, []);
-
-    // FUNCIÓN MAESTRA: REGISTRAR EN LAS 16 COLUMNAS
-    const registrarMovimiento = async (data) => {
-        const ahora = new Date();
-        const montoUsd = parseFloat(data.montoUsd || 0);
-        const montoBs = parseFloat(data.montoBs || (montoUsd * tasa));
-
-        const fila16Columnas = {
-            col01_fecha: ahora.toLocaleDateString(),
-            col02_hora: ahora.toLocaleTimeString(),
-            col03_empresa: currentUser?.empresa || "LegalYa",
-            col04_usuario: currentUser?.nombre || "Admin",
-            col05_tipo_movimiento: data.tipo, // VENTA, COMPRA, GASTO, COBRANZA
-            col06_descripcion: data.descripcion || "Sin descripción",
-            col07_monto_usd: montoUsd,
-            col08_tasa: parseFloat(tasa),
-            col09_monto_bs: montoBs,
-            col10_metodo_pago: data.metodo || "Efectivo",
-            col11_referencia: data.referencia || "N/A",
-            col12_cliente_proveedor: data.entidad || "General",
-            col13_estatus: "Completado",
-            col14_categoria: data.categoria || "Operativo",
-            col15_observaciones: data.observaciones || "",
-            col16_id_movimiento: `LY-${Date.now()}`,
-            timestamp: firebase.firestore.FieldValue.serverTimestamp()
-        };
-
-        try {
-            await db.collection("movimientos").add(fila16Columnas);
-            return { success: true };
-        } catch (error) {
-            console.error("Error Firebase:", error);
-            return { success: false };
-        }
-    };
-
-    const login = (user, pass) => {
-        if (user === "Samuel" && pass === "1234") {
-            setCurrentUser({ nombre: "Samuel", empresa: "LegalYa Comercios" });
-            return true;
-        }
-        return false;
-    };
-
-    return (
-        <AppContext.Provider value={{ 
-            isInit, setIsInit, currentUser, setCurrentUser, tasa, setTasa, 
-            movimientos, registrarMovimiento, login 
-        }}>
-            {children}
-        </AppContext.Provider>
-    );
+const db = typeof firebase !== 'undefined' ? firebase.firestore() : null;
 
 // ==========================================
 // CONSTANTES Y ALIAS CONTABLES
@@ -223,9 +80,140 @@ const ResultRow = ({ label, system, diff, isUsd = false }) => (
 );
 
 // ==========================================
-// CONTEXTO Y PROVEEDOR GLOBAL
+// CONTEXTO Y PROVEEDOR GLOBAL (NÚCLEO CLOUD)
 // ==========================================
+const AppContext = createContext();
 
+const AppProvider = ({ children }) => {
+    const getSaved = (key, fallback) => {
+        try { const item = localStorage.getItem(key); return item ? JSON.parse(item) : fallback; } 
+        catch (e) { return fallback; }
+    };
+
+    const [isInit, setIsInit] = useState(() => localStorage.getItem('legaly_init') === 'true');
+    const [tasaBCV, setTasaBCV] = useState(() => parseFloat(localStorage.getItem('legaly_tasa')) || 0);
+    const [currentUser, setCurrentUser] = useState(() => getSaved('legaly_user', null));
+    const [isLocked, setIsLocked] = useState(() => localStorage.getItem('legaly_locked') === 'true');
+    
+    // Estados aislados (No van a LocalStorage, vienen de Firebase)
+    const [journal, setJournal] = useState([]);
+    const [contacts, setContacts] = useState([]);
+    const [inventory, setInventory] = useState([]);
+
+    useEffect(() => {
+        localStorage.setItem('legaly_init', isInit);
+        localStorage.setItem('legaly_tasa', tasaBCV.toString());
+        localStorage.setItem('legaly_user', JSON.stringify(currentUser));
+        localStorage.setItem('legaly_locked', isLocked);
+    }, [isInit, tasaBCV, currentUser, isLocked]);
+
+    // Lógica robusta de Inventario basada en la base de datos
+    useEffect(() => {
+        const stockMap = {};
+        journal.forEach(row => {
+            const cta = String(row.codigo_cuenta || row.Cuenta || '').trim();
+            const conceptoStr = String(row.concepto || row.Concepto || '').toUpperCase();
+            
+            if (cta === CTA.INVENTARIO && conceptoStr) {
+                let name = conceptoStr.split('|')[0]
+                    .replace(/^(ENTRADA|SALIDA|RECEPCION|VENTA|COMPRA|COSTO VENTA|COSTO)\s*:?\s*/i, '').trim();
+                let qty = parseFloat(row.cantidad || row.Cantidad) || 0;
+                
+                if (!name || name === 'ASIENTO DE APERTURA') return;
+                
+                if (!stockMap[name]) {
+                    stockMap[name] = { 
+                        name, 
+                        stock: 0, 
+                        unit: (row.unidad || row.Unidad_Medida || 'und').toLowerCase(), 
+                        cost: 0, 
+                        sellPrice: parseFloat(row.precio_venta || row.Precio_Venta) || 0 
+                    };
+                }
+                
+                const debe = parseFloat(row.debe_usd || row.Debe || 0);
+                const haber = parseFloat(row.haber_usd || row.Haber || 0);
+                const precio = parseFloat(row.precio_venta || row.Precio_Venta || 0);
+
+                if (debe > 0) { 
+                    stockMap[name].stock += qty; 
+                    if(qty > 0) stockMap[name].cost = (debe / qty); 
+                }
+                if (haber > 0) stockMap[name].stock -= qty;
+                if (precio > 0) stockMap[name].sellPrice = precio;
+            }
+        });
+        setInventory(Object.values(stockMap).map(p => ({ ...p, id: `p-${p.name}` })));
+    }, [journal]);
+
+    // Función de escritura en Firebase (Formato 16 Columnas)
+    const addTransaction = async (newRows) => {
+        if (isLocked) return alert("SISTEMA BLOQUEADO. Inicie un nuevo ciclo.");
+        const rowsArray = Array.isArray(newRows) ? newRows : [newRows];
+        
+        // UI Inmediata
+        setJournal(prev => [...prev, ...rowsArray]);
+
+        if (db && currentUser) {
+            try {
+                const batch = db.batch();
+                const RIF = currentUser.rif || currentUser.RIF || RIF_EMPRESA;
+                const EMPRESA = currentUser.nombreEmpresa || currentUser.EMPRESA || NOMBRE_EMPRESA;
+
+                rowsArray.forEach(row => {
+                    const docRef = db.collection("movimientos").doc();
+                    batch.set(docRef, {
+                        empresa: EMPRESA,
+                        rif: RIF,
+                        cuenta_contable: String(row.cuenta_contable || row.Nombre || ""),
+                        codigo_cuenta: String(row.codigo_cuenta || row.Cuenta || ""),
+                        concepto: String(row.concepto || row.Concepto || ""),
+                        debe_usd: Number(row.debe_usd || row.Debe || 0),
+                        haber_usd: Number(row.haber_usd || row.Haber || 0),
+                        debe_bs: Number(row.debe_bs || 0),
+                        haber_bs: Number(row.haber_bs || 0),
+                        tasa: Number(row.tasa || tasaBCV || 0),
+                        ref_doc: String(row.ref_doc || row.Ref || ""),
+                        cantidad: Number(row.cantidad || row.Cantidad || 0),
+                        unidad: String(row.unidad || row.Unidad_Medida || "und"),
+                        precio_venta: Number(row.precio_venta || row.Precio_Venta || 0),
+                        entidad: String(row.entidad || row.Entidad || "GENERAL"),
+                        usuario_emisor: currentUser.usuario || currentUser.USUARIO || "S/N",
+                        fecha_servidor: firebase.firestore.FieldValue.serverTimestamp(),
+                        fecha_local: new Date().toISOString()
+                    });
+                });
+                await batch.commit();
+            } catch (err) {
+                console.error("Error subiendo a Firebase:", err);
+            }
+        }
+    };
+
+    // Función de contactos a Firebase
+    const addContact = async (contactoData) => {
+        if (!db || !currentUser) return;
+        try {
+            const empresaRIF = currentUser.rif || currentUser.RIF || "J-00000000";
+            const nuevoContacto = {
+                ...contactoData,
+                rif_empresa: empresaRIF,
+                fecha_creacion: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            const docRef = db.collection("contactos").doc();
+            await docRef.set(nuevoContacto);
+            setContacts(prev => [...prev, { ...nuevoContacto, dbId: docRef.id }]);
+        } catch (err) { console.error("Error guardando contacto:", err); }
+    };
+
+    const value = { 
+        isInit, setIsInit, tasaBCV, setTasaBCV, currentUser, setCurrentUser, 
+        journal, setJournal, contacts, setContacts, isLocked, setIsLocked, 
+        inventory, addTransaction, addContact 
+    };
+
+    return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+};
 
 // ==========================================
 // PANTALLAS DE ACCESO Y CONFIGURACIÓN INICIAL
@@ -239,7 +227,7 @@ const LoginScreen = () => {
     const handleLogin = (e) => {
         e.preventDefault();
         const usuarios = window.USUARIOS || [];
-        const validUser = usuarios.find(u => u.usuario === user && u.clave === pass);
+        const validUser = usuarios.find(u => (u.usuario || u.USUARIO) === user && (u.clave || u.CLAVE) === pass);
         
         if (validUser) { 
             setError(''); 
@@ -286,46 +274,33 @@ const LoginScreen = () => {
 };
 
 const StartScreen = () => {
-    const { currentUser, setTasaBCV, setJournal, setIsInit, updateInventory, setInventory } = useContext(AppContext);
+    const { currentUser, setTasaBCV, setJournal, setContacts, setIsInit } = useContext(AppContext);
     const [tasa, setTasa] = useState('');
     const [loading, setLoading] = useState(false);
     const [listo, setListo] = useState(false);
+    const [stats, setStats] = useState({ movs: 0, conts: 0 });
 
-    const handleLoadExcel = (e) => {
-        const file = e.target.files[0]; 
-        if (!file) return;
-        if (!window.XLSX) return alert("⚠️ La librería XLSX no está cargada. Verifique su conexión.");
-        
+    const cargarDesdeNube = async () => {
+        if (!db || !currentUser) return alert("Verifique su conexión a internet.");
         setLoading(true);
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            try {
-                const data = new Uint8Array(evt.target.result);
-                const workbook = XLSX.read(data, { type: 'array' });
-                const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
-                const isOld = (rows[0] || []).length <= 13;
-                
-                const parsed = rows.slice(1).filter(l => l.length > 0 && l[2]).map(c => {
-                    return isOld 
-                        ? { Empresa: String(c[0]||''), RIF: String(c[1]||''), Fecha: String(c[2]||''), Hora: String(c[3]||''), Cuenta: String(c[4]||'').trim(), Nombre: String(c[5]||''), Concepto: String(c[6]||''), Debe: parseFloat(c[7])||0, Haber: parseFloat(c[8])||0, Unidad_Medida: String(c[9]||''), Tasa: parseFloat(c[10])||0, Ref: String(c[11]||''), Precio_Venta: parseFloat(c[12])||0, Cantidad: 0, Entidad: 'GENERAL' }
-                        : { Empresa: String(c[0]||''), RIF: String(c[1]||''), Fecha: String(c[2]||''), Hora: '', Nombre: String(c[3]||''), Cuenta: String(c[4]||c[3]||'').trim(), Concepto: String(c[5]||''), Debe: parseFloat(c[6])||0, Haber: parseFloat(c[7])||0, Tasa: parseFloat(c[10])||0, Ref: String(c[11]||''), Cantidad: parseFloat(c[12])||0, Unidad_Medida: String(c[13]||''), Precio_Venta: parseFloat(c[14])||0, Entidad: String(c[15]||'') };
-                });
-                
-                setJournal(parsed); 
-                setInventory(updateInventory(parsed)); 
-                setListo(true);
-            } catch (err) { 
-                alert("Error al leer el archivo Excel."); 
-            } finally { 
-                setLoading(false); 
-            }
-        };
-        reader.readAsArrayBuffer(file);
-    };
+        const RIF = currentUser.rif || currentUser.RIF;
+        try {
+            const movsSnapshot = await db.collection("movimientos").where("rif", "==", RIF).get();
+            const contsSnapshot = await db.collection("contactos").where("rif_empresa", "==", RIF).get();
+            
+            const movs = movsSnapshot.docs.map(d => d.data());
+            const conts = contsSnapshot.docs.map(d => ({ dbId: d.id, ...d.data() }));
 
-    const cargarLocal = () => {
-        setLoading(true);
-        setTimeout(() => { setListo(true); setLoading(false); }, 800);
+            setJournal(movs);
+            setContacts(conts);
+            setStats({ movs: movs.length, conts: conts.length });
+            setListo(true);
+        } catch (e) {
+            console.error("Error al descargar:", e);
+            alert("Hubo un problema descargando los datos.");
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -333,8 +308,8 @@ const StartScreen = () => {
             <div className="bg-slate-800 p-10 rounded-[2.5rem] w-full max-w-md border border-slate-700 shadow-2xl">
                 <div className="text-center mb-8">
                     <h2 className="text-blue-500 font-black tracking-widest text-[10px] uppercase mb-2">Apertura de Jornada</h2>
-                    <h1 className="text-2xl font-black text-white uppercase">{currentUser?.nombreEmpresa}</h1>
-                    <p className="text-slate-400 text-xs font-bold mt-1 uppercase">Usuario: {currentUser?.usuario}</p>
+                    <h1 className="text-2xl font-black text-white uppercase">{currentUser?.nombreEmpresa || currentUser?.EMPRESA}</h1>
+                    <p className="text-slate-400 text-xs font-bold mt-1 uppercase">Usuario: {currentUser?.usuario || currentUser?.USUARIO}</p>
                 </div>
 
                 <div className="space-y-6">
@@ -348,25 +323,23 @@ const StartScreen = () => {
 
                     <div className="bg-slate-900 p-6 rounded-3xl border border-slate-700">
                         <div className="flex justify-between items-center mb-4">
-                            <label className="text-slate-500 text-[10px] font-black uppercase ml-2">Libro Diario</label>
+                            <label className="text-slate-500 text-[10px] font-black uppercase ml-2">Sincronización Nube</label>
                             {listo && <span className="bg-emerald-500/10 text-emerald-400 text-[10px] px-2 py-1 rounded-full font-bold">LISTO</span>}
                         </div>
                         
                         {!listo ? (
-                            <div className="space-y-3">
-                                <button onClick={cargarLocal} disabled={loading} className="w-full py-4 bg-slate-800 text-slate-300 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-slate-700 transition-all border border-slate-700">
-                                    {loading ? 'Cargando...' : 'Sincronizar Memoria Local'}
-                                </button>
-                                <div className="relative">
-                                    <input type="file" id="excelFile" className="hidden" accept=".xlsx, .xls, .csv" onChange={handleLoadExcel}/>
-                                    <label htmlFor="excelFile" className="w-full py-4 bg-transparent border-2 border-dashed border-slate-700 text-slate-400 hover:text-blue-400 hover:border-blue-500 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all">
-                                        <Icon name="FileSpreadsheet" size={16} /> Cargar Respaldo (Excel)
-                                    </label>
-                                </div>
-                            </div>
+                            <button onClick={cargarDesdeNube} disabled={loading} className="w-full py-4 bg-slate-800 text-slate-300 rounded-2xl text-xs font-black uppercase flex items-center justify-center gap-2 hover:bg-slate-700 transition-all border border-slate-700">
+                                {loading ? <Icon name="Loader" className="animate-spin" size={16}/> : <Icon name="CloudDownload" size={16}/>}
+                                {loading ? 'Conectando...' : 'Sincronizar Movimientos'}
+                            </button>
                         ) : (
-                            <div className="flex items-center gap-3 text-slate-400 text-xs font-medium ml-2 bg-slate-800 p-4 rounded-2xl">
-                                <Icon name="CheckCircle" size={18} className="text-emerald-500" /> Transacciones listas.
+                            <div className="flex flex-col gap-2 bg-slate-800 p-4 rounded-2xl">
+                                <div className="flex items-center justify-between text-slate-400 text-xs font-bold">
+                                    <span>Movimientos:</span> <span className="text-white">{stats.movs}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-slate-400 text-xs font-bold">
+                                    <span>Contactos:</span> <span className="text-white">{stats.conts}</span>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -386,32 +359,54 @@ const StartScreen = () => {
 
 const Dashboard = ({ setView }) => {
     const { currentUser, journal, tasaBCV, isLocked, setIsInit, setCurrentUser } = useContext(AppContext);
-    const [topFilter, setTopFilter] = useState('dia');
-
-    const nombreEmp = currentUser?.nombreEmpresa || NOMBRE_EMPRESA;
+    
+    // ESTADO PARA EL MODO OSCURO
+    const [isDarkMode, setIsDarkMode] = useState(false);
+    
+    const nombreEmp = currentUser?.nombreEmpresa || currentUser?.EMPRESA || NOMBRE_EMPRESA;
     const tema = currentUser?.colorTema || 'blue';
+
+    // EFECTO PARA CAMBIAR EL FONDO DE TODA LA PÁGINA (BODY)
+    useEffect(() => {
+        if (isDarkMode) {
+            document.body.style.backgroundColor = "#0f172a"; // slate-900
+        } else {
+            document.body.style.backgroundColor = "#f8fafc"; // slate-50
+        }
+    }, [isDarkMode]);
+
+    // VARIABLES DE ESTILO DINÁMICO
+    const bgContainer = isDarkMode ? 'bg-slate-900' : 'bg-slate-50';
+    const cardClass = isDarkMode 
+        ? 'bg-slate-800 border-slate-700 shadow-2xl' 
+        : 'bg-white border-slate-100 shadow-sm';
+    const textMain = isDarkMode ? 'text-white' : 'text-slate-900';
+    const textSub = isDarkMode ? 'text-slate-400' : 'text-slate-500';
 
     const stats = useMemo(() => {
         let usd = 0, bsFisico = 0, bancosFisico = 0, cxc = 0, gastos = 0;
         journal.forEach(r => {
-            const neto = r.Debe - r.Haber;
-            const tH = parseFloat(r.Tasa) || tasaBCV;
-            const cta = String(r.Cuenta || '').trim();
+            const debe = parseFloat(r.debe_usd || r.Debe || 0);
+            const haber = parseFloat(r.haber_usd || r.Haber || 0);
+            const neto = debe - haber;
+            const tH = parseFloat(r.tasa || r.Tasa) || tasaBCV;
+            const cta = String(r.codigo_cuenta || r.Cuenta || '').trim();
+
             if (cta === CTA.CAJA_USD || cta.includes('$')) usd += neto;
             if (cta === CTA.CAJA_BS || cta.includes('Bs')) bsFisico += (neto * tH);
             if (cta === CTA.BANCOS || cta.includes('Banco')) bancosFisico += (neto * tH);
             if (cta === CTA.CXC || cta.toUpperCase().includes('COBRAR')) cxc += neto;
-            if (cta.startsWith('6.') && r.Debe > 0) gastos += r.Debe;
+            if (cta.startsWith('5.') || cta.startsWith('6.') && debe > 0) gastos += debe;
         });
         return { usd, bsFisico, bancosFisico, cxc, gastos };
     }, [journal, tasaBCV]);
 
     const recentActivity = useMemo(() => {
         const grouped = {};
-        for (let i = journal.length - 1; i >= 0; i--) {
-            const r = journal[i];
-            const rRef = String(r.Ref || '');
-            if (!rRef) continue;
+        const reversed = [...journal].reverse();
+        reversed.forEach(r => {
+            const rRef = String(r.ref_doc || r.Ref || '');
+            if (!rRef) return;
 
             if (!grouped[rRef]) {
                 let type = 'Registro'; let icon = 'Circle'; let color = 'text-slate-500'; let bg = 'bg-slate-100';
@@ -421,40 +416,49 @@ const Dashboard = ({ setView }) => {
                 else if (rRef.startsWith('REC')) { type = 'Compra'; icon = 'Truck'; color = 'text-blue-600'; bg = 'bg-blue-100'; }
                 else if (rRef.startsWith('RCP')) { type = 'Abono'; icon = 'UserCheck'; color = 'text-orange-600'; bg = 'bg-orange-100'; }
 
-                const conceptoStr = String(r.Concepto || '');
-                grouped[rRef] = { ref: rRef, time: String(r.Hora || ''), date: String(r.Fecha || ''), type, icon, color, bg, desc: conceptoStr.split('|')[0].trim(), amount: 0 };
+                const conceptoStr = String(r.concepto || r.Concepto || '');
+                const timeStr = r.fecha_local ? new Date(r.fecha_local).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : String(r.Hora || '');
+                grouped[rRef] = { ref: rRef, time: timeStr, type, icon, color, bg, desc: conceptoStr.split('|')[0].trim(), amount: 0 };
             }
             const g = grouped[rRef];
-            const cta = String(r.Cuenta || '').trim();
-            if (rRef.startsWith('VTA') && (cta === CTA.VENTAS || cta.toUpperCase().includes('VENTA'))) g.amount += r.Haber;
-            else if (rRef.startsWith('GST') && (cta.startsWith('6.') || cta.toUpperCase().includes('GASTO'))) g.amount += r.Debe;
-            else if (rRef.startsWith('REC') && (cta === CTA.INVENTARIO || cta.toUpperCase().includes('INVENTARIO'))) g.amount += r.Debe;
-            else if (rRef.startsWith('RCP') && (cta === CTA.CXC || cta.toUpperCase().includes('COBRAR'))) g.amount += r.Haber;
-        }
+            const cta = String(r.codigo_cuenta || r.Cuenta || '').trim();
+            const debe = parseFloat(r.debe_usd || r.Debe || 0);
+            const haber = parseFloat(r.haber_usd || r.Haber || 0);
+
+            if (rRef.startsWith('VTA') && (cta === CTA.VENTAS || cta.includes('VENTA'))) g.amount += haber;
+            else if (rRef.startsWith('GST') && (cta.startsWith('6.') || cta.includes('GASTO'))) g.amount += debe;
+            else if (rRef.startsWith('REC') && cta === CTA.INVENTARIO) g.amount += debe;
+            else if (rRef.startsWith('RCP') && cta === CTA.CXC) g.amount += haber;
+        });
         return Object.values(grouped).slice(0, 8); 
     }, [journal]);
 
     const topDebtors = useMemo(() => {
         const balances = {};
-        journal.filter(t => String(t.Cuenta||'').trim() === CTA.CXC || String(t.Cuenta||'').toUpperCase().includes('COBRAR')).forEach(t => {
-            const conceptoStr = String(t.Concepto || '');
-            const match = conceptoStr.match(/Cliente:\s*(.+)$/i);
-            const cliente = match ? match[1].trim() : (String(t.Entidad || "DESCONOCIDO"));
+        journal.filter(t => {
+            const cta = String(t.codigo_cuenta || t.Cuenta || '').trim();
+            return cta === CTA.CXC || cta.includes('COBRAR');
+        }).forEach(t => {
+            const conceptoStr = String(t.concepto || t.Concepto || '');
+            let cliente = String(t.entidad || t.Entidad || "DESCONOCIDO");
+            if (cliente === "GENERAL" && conceptoStr.includes("Cliente:")) cliente = conceptoStr.split("Cliente:")[1].trim();
+            
             if (!balances[cliente]) balances[cliente] = 0;
-            balances[cliente] += (parseFloat(t.Debe) || 0) - (parseFloat(t.Haber) || 0);
+            balances[cliente] += (parseFloat(t.debe_usd || t.Debe || 0)) - (parseFloat(t.haber_usd || t.Haber || 0));
         });
         return Object.entries(balances).filter(([_, bal]) => bal > 0.01).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, total]) => ({ name, total }));
     }, [journal]);
 
     const topProducts = useMemo(() => {
         const salesMap = {};
-        journal.filter(row => String(row.Cuenta||'').trim() === CTA.VENTAS).forEach(row => {
-            const conceptoStr = String(row.Concepto || '');
+        journal.filter(row => String(row.codigo_cuenta || row.Cuenta || '').trim() === CTA.VENTAS).forEach(row => {
+            const conceptoStr = String(row.concepto || row.Concepto || '');
             const parts = conceptoStr.split('|').map(s => s.trim());
-            let name = parts[0].replace(/^(Venta de)\s*/i, '').split(' de ')[1]?.trim().toUpperCase() || parts[0].replace(/^(Venta de)\s*/i, '').trim().toUpperCase();
+            let name = parts[0].replace(/^(VENTA|Venta de)\s*:?\s*/i, '').trim().toUpperCase();
             if (!name) return;
             const qtyStr = parts[0].match(/(\d+(\.\d+)?)/);
-            const qty = qtyStr ? parseFloat(qtyStr[0]) : 0;
+            const qty = parseFloat(row.cantidad || row.Cantidad || 0) || (qtyStr ? parseFloat(qtyStr[0]) : 0);
+            
             if (!salesMap[name]) salesMap[name] = { name, totalQty: 0 };
             salesMap[name].totalQty += qty;
         });
@@ -466,70 +470,85 @@ const Dashboard = ({ setView }) => {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in">
+        <div className={`grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in p-4 rounded-[3rem] transition-colors duration-500 ${bgContainer}`}>
             <div className="lg:col-span-8 flex flex-col gap-6">
                 
+                {/* TARJETA SUPERIOR */}
                 <div className="flex justify-between items-end bg-slate-900 text-white p-8 rounded-[3rem] shadow-xl relative overflow-hidden">
                     <div className="relative z-10">
                         <h1 className="text-4xl font-black italic tracking-tighter uppercase">LegalYa <span className={`text-${tema}-500`}>Comercios</span></h1>
                         <p className={`text-${tema}-200 font-bold mt-1 text-sm uppercase tracking-widest`}>{nombreEmp}</p>
                     </div>
                     <div className="text-right relative z-10 flex flex-col items-end">
+                        <div className="flex gap-2 mb-4">
+                            {/* INTERRUPTOR MODO NOCTURNO */}
+                            <button 
+                                onClick={() => setIsDarkMode(!isDarkMode)} 
+                                className="flex items-center gap-2 bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl backdrop-blur-sm border border-white/5 transition-all text-white text-[10px] font-black uppercase"
+                            >
+                                <Icon name={isDarkMode ? "Sun" : "Moon"} size={14} />
+                                {isDarkMode ? 'Modo Normal' : 'Modo Nocturno'}
+                            </button>
+                            <button onClick={handleLogout} className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 transition-colors py-2 px-2">Cerrar Sesión</button>
+                        </div>
+
                         {isLocked && <span className="bg-rose-500 text-white px-3 py-1 rounded-full font-black text-[10px] uppercase mb-2 animate-pulse shadow-rose-500/50 shadow-lg">Caja Cerrada</span>}
                         <div className="bg-white/10 px-5 py-3 rounded-2xl backdrop-blur-sm border border-white/5 mb-2">
                             <span className="text-[10px] font-black text-slate-400 uppercase block mb-1">Tasa Hoy</span>
                             <span className={`text-xl font-black text-${tema}-400`}>{tasaBCV.toFixed(2)} Bs</span>
                         </div>
-                        <button onClick={handleLogout} className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300 transition-colors">Cerrar Sesión</button>
                     </div>
                     <Icon name="Activity" size={200} className="absolute -right-10 -bottom-10 text-white/5" />
                 </div>
 
-                <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                {/* MODULOS: TAMAÑO UNIFORME FORZADO */}
+                <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 auto-rows-fr [&_button]:h-32 [&_button]:w-full">
                     <div className={isLocked ? "opacity-30 pointer-events-none" : ""}><MenuButton onClick={() => setView('pos')} label="Ventas" icon="ShoppingCart" color={`bg-${tema}-600 text-white hover:bg-${tema}-700`}/></div>
                     <div className={isLocked ? "opacity-30 pointer-events-none" : ""}><MenuButton onClick={() => setView('purchase')} label="Compras" icon="Truck" color="bg-slate-800 text-white hover:bg-slate-700"/></div>
                     <div className={isLocked ? "opacity-30 pointer-events-none" : ""}><MenuButton onClick={() => setView('debts')} label="Cobranzas" icon="UserCheck" color="bg-orange-500 text-white hover:bg-orange-600"/></div>
                     <MenuButton onClick={() => setView('contacts')} label="Contactos" icon="Users" color="bg-indigo-600 text-white hover:bg-indigo-700"/>
                     <div className={isLocked ? "opacity-30 pointer-events-none" : ""}><MenuButton onClick={() => setView('expenses')} label="Gastos" icon="Receipt" color="bg-rose-500 text-white hover:bg-rose-600"/></div>
-                    <MenuButton onClick={() => setView('inventory')} label="Stock" icon="Package" color="bg-white border border-slate-200 text-slate-800 hover:bg-slate-50"/>
+                    <MenuButton onClick={() => setView('inventory')} label="Stock" icon="Package" color={isDarkMode ? "bg-slate-700 text-white border-slate-600" : "bg-white border border-slate-200 text-slate-800 hover:bg-slate-50"}/>
                     <MenuButton onClick={() => setView('close')} label={isLocked ? "Exportar" : "Cierre"} icon={isLocked ? "Download" : "Lock"} color="bg-amber-400 text-white hover:bg-amber-500"/>
                 </div>
 
+                {/* TARJETAS DE ESTADISTICAS */}
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                    <StatCard label="Usd" val={`$${stats.usd.toFixed(2)}`} icon="DollarSign" color={`text-${tema}-600`} bg="bg-white"/>
-                    <StatCard label="Bs" val={`${stats.bsFisico.toFixed(2)}`} icon="Coins" color="text-blue-600" bg="bg-white"/>
-                    <StatCard label="Bancos" val={`${stats.bancosFisico.toFixed(2)}`} icon="Landmark" color="text-indigo-600" bg="bg-white"/>
-                    <StatCard label="Fiao" val={`$${stats.cxc.toFixed(2)}`} icon="Users" color="text-orange-600" bg="bg-orange-50"/>
-                    <StatCard label="Gastos" val={`$${stats.gastos.toFixed(2)}`} icon="TrendingDown" color="text-rose-600" bg="bg-rose-50"/>
+                    <StatCard label="Usd" val={`$${stats.usd.toFixed(2)}`} icon="DollarSign" color={`text-${tema}-600`} bg={cardClass}/>
+                    <StatCard label="Bs" val={`${stats.bsFisico.toFixed(2)}`} icon="Coins" color="text-blue-600" bg={cardClass}/>
+                    <StatCard label="Bancos" val={`${stats.bancosFisico.toFixed(2)}`} icon="Landmark" color="text-indigo-600" bg={cardClass}/>
+                    <StatCard label="Fiao" val={`$${stats.cxc.toFixed(2)}`} icon="Users" color="text-orange-600" bg={isDarkMode ? cardClass : "bg-orange-50"}/>
+                    <StatCard label="Gastos" val={`$${stats.gastos.toFixed(2)}`} icon="TrendingDown" color="text-rose-600" bg={isDarkMode ? cardClass : "bg-rose-50"}/>
                 </div>
 
+                {/* RANKINGS */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col">
+                    <div className={`${cardClass} p-6 rounded-[2.5rem] border flex flex-col transition-all`}>
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="font-black text-sm uppercase text-slate-800 flex items-center gap-2"><Icon name="Award" size={16} className={`text-${tema}-600`}/> Top Vendidos</h3>
+                            <h3 className={`font-black text-sm uppercase ${textMain} flex items-center gap-2`}><Icon name="Award" size={16} className={`text-${tema}-600`}/> Top Vendidos</h3>
                         </div>
                         <div className="space-y-2 flex-1">
-                            {topProducts.length === 0 ? <p className="text-xs text-slate-400 text-center font-bold py-4 uppercase">Sin datos este periodo</p> : topProducts.map((p, i) => (
-                                <div key={i} className="flex justify-between items-center bg-slate-50 p-3 rounded-2xl">
+                            {topProducts.length === 0 ? <p className="text-xs text-slate-400 text-center font-bold py-4 uppercase">Sin datos</p> : topProducts.map((p, i) => (
+                                <div key={i} className={`flex justify-between items-center ${isDarkMode ? 'bg-slate-700/50' : 'bg-slate-50'} p-3 rounded-2xl`}>
                                     <div className="flex items-center gap-3">
-                                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${i===0 ? 'bg-amber-100 text-amber-600' : i===1 ? 'bg-slate-200 text-slate-600' : i===2 ? 'bg-orange-100 text-orange-600' : 'bg-white border border-slate-200 text-slate-400'}`}>{i+1}</span>
-                                        <span className="font-black text-xs uppercase truncate max-w-[150px]">{p.name}</span>
+                                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${i===0 ? 'bg-amber-100 text-amber-600' : 'bg-slate-200 text-slate-600'}`}>{i+1}</span>
+                                        <span className={`font-black text-xs uppercase truncate max-w-[150px] ${textMain}`}>{p.name}</span>
                                     </div>
-                                    <span className={`font-black text-${tema}-600 text-xs`}>{p.qty} unid</span>
+                                    <span className={`font-black text-${tema}-600 text-xs`}>{p.totalQty} unid</span>
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col">
+                    <div className={`${cardClass} p-6 rounded-[2.5rem] border flex flex-col transition-all`}>
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="font-black text-sm uppercase text-slate-800 flex items-center gap-2"><Icon name="AlertCircle" size={16} className="text-rose-600"/> Mayores Deudores</h3>
+                            <h3 className={`font-black text-sm uppercase ${textMain} flex items-center gap-2`}><Icon name="AlertCircle" size={16} className="text-rose-600"/> Mayores Deudores</h3>
                         </div>
                         <div className="space-y-3 flex-1">
-                            {topDebtors.length === 0 ? <p className="text-xs text-emerald-500 text-center font-bold py-4 uppercase">No hay cuentas fiao :)</p> : topDebtors.map((d, i) => (
-                                <div key={i} className="flex justify-between items-center bg-orange-50/50 p-4 rounded-2xl border border-orange-100">
+                            {topDebtors.length === 0 ? <p className="text-xs text-emerald-500 text-center font-bold py-4 uppercase">No hay deudas</p> : topDebtors.map((d, i) => (
+                                <div key={i} className={`flex justify-between items-center ${isDarkMode ? 'bg-orange-900/20 border-orange-900/30' : 'bg-orange-50/50 border-orange-100'} p-4 rounded-2xl border`}>
                                     <div className="flex flex-col">
-                                        <span className="font-black text-xs uppercase text-slate-800 truncate max-w-[150px]">{d.name}</span>
+                                        <span className={`font-black text-xs uppercase truncate max-w-[150px] ${textMain}`}>{d.name}</span>
                                         <span className="text-[10px] font-bold text-slate-400">Cliente</span>
                                     </div>
                                     <span className="font-black text-rose-600 text-lg">${d.total.toFixed(2)}</span>
@@ -540,26 +559,27 @@ const Dashboard = ({ setView }) => {
                 </div>
             </div>
 
-            <div className="lg:col-span-4 bg-white rounded-[3rem] shadow-sm border border-slate-100 p-8 flex flex-col h-[calc(100vh-5rem)] min-h-[600px]">
+            {/* LATERAL: ACTIVIDAD RECIENTE */}
+            <div className={`lg:col-span-4 ${cardClass} border rounded-[3rem] p-8 flex flex-col h-[calc(100vh-5rem)] min-h-[600px] transition-all`}>
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-black text-lg uppercase text-slate-900">Actividad Reciente</h3>
-                    <div className="p-3 bg-slate-50 rounded-2xl"><Icon name="List" size={20} className="text-slate-400"/></div>
+                    <h3 className={`font-black text-lg uppercase ${textMain}`}>Actividad Reciente</h3>
+                    <div className={`p-3 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-50'} rounded-2xl`}><Icon name="List" size={20} className="text-slate-400"/></div>
                 </div>
                 
                 <div className="flex-1 overflow-y-auto pr-2 space-y-6 scrollbar-hide">
                     {recentActivity.length === 0 ? <p className="text-center text-slate-400 font-bold text-sm uppercase mt-10">Sin transacciones</p> : recentActivity.map((act, i) => (
                         <div key={i} className="flex gap-4 items-start relative">
-                            {i !== recentActivity.length -1 && <div className="absolute left-6 top-10 bottom-[-24px] w-[2px] bg-slate-100"></div>}
+                            {i !== recentActivity.length -1 && <div className={`absolute left-6 top-10 bottom-[-24px] w-[2px] ${isDarkMode ? 'bg-slate-700' : 'bg-slate-100'}`}></div>}
                             
                             <div className={`p-3 rounded-2xl ${act.bg} ${act.color} flex-shrink-0 relative z-10`}>
                                 <Icon name={act.icon} size={20} />
                             </div>
                             <div className="flex-1 min-w-0 pt-1">
                                 <div className="flex justify-between items-baseline mb-1">
-                                    <p className="font-black text-sm uppercase">{act.type}</p>
+                                    <p className={`font-black text-sm uppercase ${textMain}`}>{act.type}</p>
                                     <p className="text-[10px] font-bold text-slate-400 flex-shrink-0">{act.time}</p>
                                 </div>
-                                <p className="text-xs text-slate-500 font-bold leading-tight line-clamp-2">{act.desc}</p>
+                                <p className={`text-xs ${textSub} font-bold leading-tight line-clamp-2`}>{act.desc}</p>
                                 <div className="flex justify-between items-center mt-2">
                                     <p className="text-[9px] font-black text-slate-300 uppercase">{act.ref}</p>
                                     {act.amount > 0 && <p className={`text-xs font-black ${act.color}`}>${act.amount.toFixed(2)}</p>}
@@ -576,8 +596,6 @@ const Dashboard = ({ setView }) => {
 const POSModule = ({ onBack }) => {
     const { currentUser, inventory, tasaBCV, addTransaction, contacts } = useContext(AppContext);
     const validClients = contacts.filter(c => c.type === 'cliente' || c.type === 'ambos');
-    const nombreEmp = currentUser?.nombreEmpresa || NOMBRE_EMPRESA;
-    const rifEmp = currentUser?.rif || RIF_EMPRESA;
 
     const [client, setClient] = useState({ name: '', id: '' });
     const [searchTerm, setSearchTerm] = useState('');
@@ -633,8 +651,8 @@ const POSModule = ({ onBack }) => {
         const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [80, 200] });
         
         doc.setFont("helvetica", "bold"); doc.setFontSize(14);
-        doc.text(nombreEmp, 40, 10, { align: "center" });
-        doc.setFontSize(10); doc.text(`RIF: ${rifEmp}`, 40, 15, { align: "center" });
+        doc.text(currentUser?.nombreEmpresa || "Empresa", 40, 10, { align: "center" });
+        doc.setFontSize(10); doc.text(`RIF: ${currentUser?.rif || ""}`, 40, 15, { align: "center" });
         
         doc.setFont("helvetica", "normal"); doc.setFontSize(8);
         doc.text(`Fecha: ${date} ${time}`, 5, 25); doc.text(`Ticket: ${ref}`, 5, 29);
@@ -664,34 +682,33 @@ const POSModule = ({ onBack }) => {
 
     const handleVenta = () => {
         if (!canProcess) return;
-
-        const date = new Date().toLocaleDateString(), time = new Date().toLocaleTimeString(), ref = `VTA-${Date.now().toString().slice(-4)}`;
+        const ref = `VTA-${Date.now().toString().slice(-4)}`;
         let rows = [];
         
         cart.forEach(item => {
             const conceptoVenta = `Venta de ${item.qty.toFixed(item.unit === 'kg' ? 3 : 0)} ${item.unit} de ${item.name} | Cliente: ${client.name}`;
             const conceptoCosto = `Costo Venta | Cant: ${item.qty.toFixed(3)} ${item.unit} de ${item.name}`;
             
-            rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.VENTAS, Nombre: 'Ventas de Mercancía', Concepto: conceptoVenta, Debe: 0, Haber: item.qty * item.sellPrice, Unidad_Medida: item.unit, Tasa: tasaBCV, Ref: ref, Precio_Venta: item.sellPrice, Entidad: client.name.toUpperCase(), Cantidad: item.qty });
-            rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.INVENTARIO, Nombre: 'Inventario de Mercancía', Concepto: conceptoCosto, Debe: 0, Haber: item.qty * item.cost, Unidad_Medida: item.unit, Tasa: tasaBCV, Ref: ref, Precio_Venta: item.sellPrice, Entidad: client.name.toUpperCase(), Cantidad: item.qty });
-            rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.COSTO_VTA, Nombre: 'Costo de Ventas', Concepto: conceptoCosto, Debe: item.qty * item.cost, Haber: 0, Unidad_Medida: item.unit, Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase(), Cantidad: item.qty });
+            rows.push({ codigo_cuenta: CTA.VENTAS, cuenta_contable: 'Ventas de Mercancía', concepto: conceptoVenta, debe_usd: 0, haber_usd: item.qty * item.sellPrice, unidad: item.unit, ref_doc: ref, precio_venta: item.sellPrice, entidad: client.name.toUpperCase(), cantidad: item.qty });
+            rows.push({ codigo_cuenta: CTA.INVENTARIO, cuenta_contable: 'Inventario de Mercancía', concepto: conceptoCosto, debe_usd: 0, haber_usd: item.qty * item.cost, unidad: item.unit, ref_doc: ref, precio_venta: item.sellPrice, entidad: client.name.toUpperCase(), cantidad: item.qty });
+            rows.push({ codigo_cuenta: CTA.COSTO_VTA, cuenta_contable: 'Costo de Ventas', concepto: conceptoCosto, debe_usd: item.qty * item.cost, haber_usd: 0, unidad: item.unit, ref_doc: ref, precio_venta: 0, entidad: client.name.toUpperCase(), cantidad: item.qty });
         });
 
-        if (parseFloat(payments.usd) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.CAJA_USD, Nombre: 'Caja Principal ($)', Concepto: `Cobro Venta ${ref} (Efectivo $)`, Debe: parseFloat(payments.usd), Haber: 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
-        if (parseFloat(payments.bs) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.CAJA_BS, Nombre: 'Caja Principal (Bs)', Concepto: `Cobro Venta ${ref} (Efectivo Bs)`, Debe: parseFloat(payments.bs) / tasaBCV, Haber: 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
-        if (parseFloat(payments.banco) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.BANCOS, Nombre: 'Bancos Nacionales', Concepto: `Cobro Venta ${ref} (Ref: ${payments.refBanco})`, Debe: parseFloat(payments.banco) / tasaBCV, Haber: 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
-        if (parseFloat(payments.fiao) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.CXC, Nombre: 'Cuentas por Cobrar Clientes', Concepto: `Crédito Venta ${ref} | Cliente: ${client.name}`, Debe: parseFloat(payments.fiao) / tasaBCV, Haber: 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
+        if (parseFloat(payments.usd) > 0) rows.push({ codigo_cuenta: CTA.CAJA_USD, cuenta_contable: 'Caja Principal ($)', concepto: `Cobro Venta ${ref} (Efectivo $)`, debe_usd: parseFloat(payments.usd), haber_usd: 0, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
+        if (parseFloat(payments.bs) > 0) rows.push({ codigo_cuenta: CTA.CAJA_BS, cuenta_contable: 'Caja Principal (Bs)', concepto: `Cobro Venta ${ref} (Efectivo Bs)`, debe_usd: parseFloat(payments.bs) / tasaBCV, haber_usd: 0, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
+        if (parseFloat(payments.banco) > 0) rows.push({ codigo_cuenta: CTA.BANCOS, cuenta_contable: 'Bancos Nacionales', concepto: `Cobro Venta ${ref} (Ref: ${payments.refBanco})`, debe_usd: parseFloat(payments.banco) / tasaBCV, haber_usd: 0, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
+        if (parseFloat(payments.fiao) > 0) rows.push({ codigo_cuenta: CTA.CXC, cuenta_contable: 'Cuentas por Cobrar Clientes', concepto: `Crédito Venta ${ref} | Cliente: ${client.name}`, debe_usd: parseFloat(payments.fiao) / tasaBCV, haber_usd: 0, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
 
         if (isOverpaid) {
-            if (parseFloat(change.usd) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.CAJA_USD, Nombre: 'Caja Principal ($)', Concepto: `Vuelto Venta ${ref} (Efectivo $)`, Debe: 0, Haber: parseFloat(change.usd), Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
-            if (parseFloat(change.bs) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.CAJA_BS, Nombre: 'Caja Principal (Bs)', Concepto: `Vuelto Venta ${ref} (Efectivo Bs)`, Debe: 0, Haber: parseFloat(change.bs) / tasaBCV, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
-            if (parseFloat(change.banco) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.BANCOS, Nombre: 'Bancos Nacionales', Concepto: `Vuelto Venta ${ref} (Ref: ${change.refBanco})`, Debe: 0, Haber: parseFloat(change.banco) / tasaBCV, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
+            if (parseFloat(change.usd) > 0) rows.push({ codigo_cuenta: CTA.CAJA_USD, cuenta_contable: 'Caja Principal ($)', concepto: `Vuelto Venta ${ref} (Efectivo $)`, debe_usd: 0, haber_usd: parseFloat(change.usd), unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
+            if (parseFloat(change.bs) > 0) rows.push({ codigo_cuenta: CTA.CAJA_BS, cuenta_contable: 'Caja Principal (Bs)', concepto: `Vuelto Venta ${ref} (Efectivo Bs)`, debe_usd: 0, haber_usd: parseFloat(change.bs) / tasaBCV, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
+            if (parseFloat(change.banco) > 0) rows.push({ codigo_cuenta: CTA.BANCOS, cuenta_contable: 'Bancos Nacionales', concepto: `Vuelto Venta ${ref} (Ref: ${change.refBanco})`, debe_usd: 0, haber_usd: parseFloat(change.banco) / tasaBCV, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase(), cantidad: 0 });
         }
 
-        const dif = rows.reduce((acc, r) => acc + (parseFloat(r.Debe) || 0), 0) - rows.reduce((acc, r) => acc + (parseFloat(r.Haber) || 0), 0);
-        if (Math.abs(dif) > 0.009) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.DIF_CAMB, Nombre: 'Diferencial Cambiario', Concepto: `Ajuste Redondeo en Venta ${ref}`, Debe: dif < 0 ? Math.abs(dif) : 0, Haber: dif > 0 ? dif : 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: client.name.toUpperCase() });
+        const dif = rows.reduce((acc, r) => acc + (parseFloat(r.debe_usd) || 0), 0) - rows.reduce((acc, r) => acc + (parseFloat(r.haber_usd) || 0), 0);
+        if (Math.abs(dif) > 0.009) rows.push({ codigo_cuenta: CTA.DIF_CAMB, cuenta_contable: 'Diferencial Cambiario', concepto: `Ajuste Redondeo en Venta ${ref}`, debe_usd: dif < 0 ? Math.abs(dif) : 0, haber_usd: dif > 0 ? dif : 0, unidad: 'monto', ref_doc: ref, entidad: client.name.toUpperCase() });
 
-        generatePDF(ref, date, time);
+        generatePDF(ref, new Date().toLocaleDateString(), new Date().toLocaleTimeString());
         addTransaction(rows); 
         onBack();
     };
@@ -783,7 +800,7 @@ const POSModule = ({ onBack }) => {
                                         onChange={e => {
                                             const valor = e.target.value.toUpperCase();
                                             setClient({...client, id: valor});
-                                            const afiliado = validClients.find(c => c.id.includes(valor) && valor.length > 3);
+                                            const afiliado = validClients.find(c => (c.id || c.rif_entidad)?.includes(valor) && valor.length > 3);
                                             if (afiliado) setClient({ name: afiliado.name, id: afiliado.id });
                                         }} 
                                     />
@@ -879,9 +896,7 @@ const POSModule = ({ onBack }) => {
 };
 
 const ReceptionModule = ({ onBack }) => {
-    const { currentUser, addTransaction, tasaBCV, contacts } = useContext(AppContext);
-    const nombreEmp = currentUser?.nombreEmpresa || NOMBRE_EMPRESA;
-    const rifEmp = currentUser?.rif || RIF_EMPRESA;
+    const { addTransaction, contacts } = useContext(AppContext);
     
     const providers = contacts.filter(c => c.type === 'proveedor' || c.type === 'ambos');
 
@@ -898,18 +913,17 @@ const ReceptionModule = ({ onBack }) => {
 
     const total = cart.reduce((acc, c) => acc + c.costTotal, 0);
 
-    const totalPagado = (parseFloat(payments.usd) || 0) + ((parseFloat(payments.bs) || 0) / tasaBCV) + ((parseFloat(payments.banco) || 0) / tasaBCV) + ((parseFloat(payments.cxp) || 0));
+    const totalPagado = (parseFloat(payments.usd) || 0) + (parseFloat(payments.bs) || 0) + (parseFloat(payments.banco) || 0) + (parseFloat(payments.cxp) || 0);
     const canProcessCompra = total > 0 && provider.name && Math.abs(total - totalPagado) < 0.05;
 
     const handleFinalizar = () => {
         if (!canProcessCompra) return;
-        
-        const date = new Date().toLocaleDateString(), time = new Date().toLocaleTimeString(), ref = `REC-${Date.now().toString().slice(-4)}`;
+        const ref = `REC-${Date.now().toString().slice(-4)}`;
         let rows = [];
         
         cart.forEach(c => {
             const concepto = `Recepcion: ${c.name} | Cant: ${c.qty.toFixed(c.unit === 'kg' ? 3 : 0)} ${c.unit} | Prov: ${provider.name}`;
-            rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.INVENTARIO, Nombre: 'Inventario de Mercancía', Concepto: concepto, Debe: c.costTotal, Haber: 0, Unidad_Medida: c.unit, Tasa: tasaBCV, Ref: ref, Precio_Venta: c.sellPrice, Entidad: provider.name.toUpperCase(), Cantidad: c.qty });
+            rows.push({ codigo_cuenta: CTA.INVENTARIO, cuenta_contable: 'Inventario de Mercancía', concepto: concepto, debe_usd: c.costTotal, haber_usd: 0, unidad: c.unit, ref_doc: ref, precio_venta: c.sellPrice, entidad: provider.name.toUpperCase(), cantidad: c.qty });
         });
 
         const pMap = [
@@ -918,11 +932,11 @@ const ReceptionModule = ({ onBack }) => {
         ];
 
         pMap.forEach(p => {
-            if (parseFloat(payments[p.k]) > 0) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: p.c, Nombre: p.n, Concepto: `Pago Prov: ${provider.name} | Ref: ${ref}`, Debe: 0, Haber: parseFloat(payments[p.k]), Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: provider.name.toUpperCase() });
+            if (parseFloat(payments[p.k]) > 0) rows.push({ codigo_cuenta: p.c, cuenta_contable: p.n, concepto: `Pago Prov: ${provider.name} | Ref: ${ref}`, debe_usd: 0, haber_usd: parseFloat(payments[p.k]), unidad: 'monto', ref_doc: ref, entidad: provider.name.toUpperCase(), cantidad: 0 });
         });
         
-        const dif = rows.reduce((acc, r) => acc + (parseFloat(r.Debe) || 0), 0) - rows.reduce((acc, r) => acc + (parseFloat(r.Haber) || 0), 0);
-        if (Math.abs(dif) > 0.009) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.DIF_CAMB, Nombre: 'Diferencial Cambiario', Concepto: `Ajuste Redondeo en Compra ${ref}`, Debe: dif < 0 ? Math.abs(dif) : 0, Haber: dif > 0 ? dif : 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: provider.name.toUpperCase() });
+        const dif = rows.reduce((acc, r) => acc + (parseFloat(r.debe_usd) || 0), 0) - rows.reduce((acc, r) => acc + (parseFloat(r.haber_usd) || 0), 0);
+        if (Math.abs(dif) > 0.009) rows.push({ codigo_cuenta: CTA.DIF_CAMB, cuenta_contable: 'Diferencial Cambiario', concepto: `Ajuste Redondeo en Compra ${ref}`, debe_usd: dif < 0 ? Math.abs(dif) : 0, haber_usd: dif > 0 ? dif : 0, unidad: 'monto', ref_doc: ref, entidad: provider.name.toUpperCase() });
 
         addTransaction(rows); onBack();
     };
@@ -946,7 +960,7 @@ const ReceptionModule = ({ onBack }) => {
                                 onChange={e => {
                                     const val = e.target.value.toUpperCase();
                                     setProvider({...provider, rif: val});
-                                    const found = providers.find(p => p.id.includes(val) && val.length > 3);
+                                    const found = providers.find(p => (p.id || p.rif_entidad)?.includes(val) && val.length > 3);
                                     if(found) setProvider({ name: found.name, rif: found.id });
                                 }} 
                             />
@@ -1013,13 +1027,12 @@ const ReceptionModule = ({ onBack }) => {
                         <h3 className="font-black uppercase italic text-sm border-b border-white/10 pb-4 text-blue-400">Total Compra</h3>
                         <div className="text-right">
                             <p className="text-5xl font-black tracking-tighter italic">${total.toFixed(2)}</p>
-                            <p className="text-blue-400 font-bold">{(total * tasaBCV).toFixed(2)} Bs</p>
                         </div>
                         <div className="space-y-3">
                             <input placeholder="Pago USD $" type="number" className="w-full p-4 bg-white/5 rounded-2xl text-center font-bold outline-none border border-white/10" value={payments.usd} onChange={e => setPayments({...payments, usd: e.target.value})} />
-                            <input placeholder="Pago BS (Monto en Bolívares)" type="number" className="w-full p-4 bg-white/5 rounded-2xl text-center font-bold outline-none border border-white/10" value={payments.bs} onChange={e => setPayments({...payments, bs: e.target.value})} />
-                            <input placeholder="BANCO (Monto en Bolívares)" type="number" className="w-full p-4 bg-white/5 rounded-2xl text-center font-bold outline-none border border-white/10" value={payments.banco} onChange={e => setPayments({...payments, banco: e.target.value})} />
-                            <input placeholder="CRÉDITO CXP (Monto en Dolares)" type="number" className="w-full p-4 bg-orange-500/10 text-orange-400 rounded-2xl text-center font-bold outline-none border border-orange-500/20" value={payments.cxp} onChange={e => setPayments({...payments, cxp: e.target.value})} />
+                            <input placeholder="Pago BS ($ eq)" type="number" className="w-full p-4 bg-white/5 rounded-2xl text-center font-bold outline-none border border-white/10" value={payments.bs} onChange={e => setPayments({...payments, bs: e.target.value})} />
+                            <input placeholder="BANCO ($ eq)" type="number" className="w-full p-4 bg-white/5 rounded-2xl text-center font-bold outline-none border border-white/10" value={payments.banco} onChange={e => setPayments({...payments, banco: e.target.value})} />
+                            <input placeholder="CRÉDITO CXP ($)" type="number" className="w-full p-4 bg-orange-500/10 text-orange-400 rounded-2xl text-center font-bold outline-none border border-orange-500/20" value={payments.cxp} onChange={e => setPayments({...payments, cxp: e.target.value})} />
                         </div>
                         <button onClick={handleFinalizar} disabled={!canProcessCompra} className={`w-full py-6 rounded-[2rem] font-black uppercase italic shadow-lg transition-all ${canProcessCompra ? 'bg-blue-500 hover:bg-blue-600' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}>Confirmar Compra</button>
                     </div>
@@ -1030,9 +1043,7 @@ const ReceptionModule = ({ onBack }) => {
 };
 
 const DebtModule = ({ onBack }) => {
-    const { currentUser, journal, addTransaction, tasaBCV } = useContext(AppContext);
-    const nombreEmp = currentUser?.nombreEmpresa || NOMBRE_EMPRESA;
-    const rifEmp = currentUser?.rif || RIF_EMPRESA;
+    const { journal, addTransaction, tasaBCV } = useContext(AppContext);
 
     const [selectedClient, setSelectedClient] = useState(null);
     const [payModal, setPayModal] = useState(false);
@@ -1040,43 +1051,29 @@ const DebtModule = ({ onBack }) => {
 
     const clientBalances = useMemo(() => {
         const balances = {};
-        journal.filter(t => String(t.Cuenta||'').trim() === CTA.CXC || String(t.Cuenta||'').toUpperCase().includes('COBRAR')).forEach(t => {
-            const conceptoStr = String(t.Concepto || '');
-            const cliente = conceptoStr.split('| Cliente: ')[1] || t.Entidad || "DESCONOCIDO";
+        journal.filter(t => String(t.codigo_cuenta || t.Cuenta||'').trim() === CTA.CXC || String(t.codigo_cuenta || t.Cuenta||'').includes('COBRAR')).forEach(t => {
+            const conceptoStr = String(t.concepto || t.Concepto || '');
+            let cliente = String(t.entidad || t.Entidad || "DESCONOCIDO");
+            if (cliente === "GENERAL" && conceptoStr.includes("Cliente:")) cliente = conceptoStr.split("Cliente:")[1].trim();
+
             if (!balances[cliente]) balances[cliente] = { name: cliente, total: 0 };
-            balances[cliente].total += (parseFloat(t.Debe) || 0) - (parseFloat(t.Haber) || 0);
+            balances[cliente].total += (parseFloat(t.debe_usd || t.Debe) || 0) - (parseFloat(t.haber_usd || t.Haber) || 0);
         });
         return Object.values(balances).filter(b => b.total > 0.01);
     }, [journal]);
 
     const totalToPayUSD = (parseFloat(payData.usd) || 0) + ((parseFloat(payData.bs) || 0) / tasaBCV) + ((parseFloat(payData.banco) || 0) / tasaBCV);
 
-    const generateReceiptPDF = (ref, clientName, amount, methods) => {
-        if (!window.jspdf) return alert("El PDF no pudo generarse (falta librería jsPDF), pero el pago fue registrado.");
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF({ unit: 'mm', format: [80, 150] });
-        doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text("RECIBO DE PAGO", 40, 10, { align: "center" });
-        doc.setFontSize(8); doc.text(nombreEmp, 40, 15, { align: "center" });
-        doc.line(5, 20, 75, 20); doc.text(`REF: ${ref}`, 5, 25); doc.text(`FECHA: ${new Date().toLocaleString()}`, 5, 29); doc.text(`CLIENTE: ${clientName}`, 5, 33);
-        doc.line(5, 36, 75, 36); doc.setFontSize(10); doc.text("CONCEPTO: ABONO A CUENTA", 5, 42);
-        doc.setFontSize(14); doc.text(`PAGADO: $${amount.toFixed(2)}`, 5, 52);
-        doc.setFontSize(8); let y = 65; doc.text("DETALLE:", 5, y); y+=5;
-        if (methods.usd > 0) { doc.text(`- Efectivo $: $${methods.usd}`, 10, y); y+=4; }
-        if (methods.bs > 0) { doc.text(`- Efectivo Bs: Bs.${methods.bs}`, 10, y); y+=4; }
-        if (methods.banco > 0) { doc.text(`- Banco: Bs.${methods.banco}`, 10, y); y+=4; }
-        doc.save(`Recibo_${ref}.pdf`);
-    };
-
     const handleProcessPayment = () => {
         if (totalToPayUSD <= 0) return;
-        const ref = `RCP-${Date.now().toString().slice(-4)}`, date = new Date().toLocaleDateString(), time = new Date().toLocaleTimeString();
-        let rows = [{ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.CXC, Nombre: 'Cuentas por Cobrar Clientes', Concepto: `Abono Deuda | Cliente: ${selectedClient.name}`, Debe: 0, Haber: totalToPayUSD, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: selectedClient.name.toUpperCase() }];
+        const ref = `RCP-${Date.now().toString().slice(-4)}`;
+        let rows = [{ codigo_cuenta: CTA.CXC, cuenta_contable: 'Cuentas por Cobrar Clientes', concepto: `Abono Deuda | Cliente: ${selectedClient.name}`, debe_usd: 0, haber_usd: totalToPayUSD, unidad: 'monto', ref_doc: ref, entidad: selectedClient.name.toUpperCase() }];
         
-        if (parseFloat(payData.usd) > 0) rows.push({ ...rows[0], Cuenta: CTA.CAJA_USD, Nombre: 'Caja Principal ($)', Concepto: `Cobro a ${selectedClient.name}`, Debe: parseFloat(payData.usd), Haber: 0 });
-        if (parseFloat(payData.bs) > 0) rows.push({ ...rows[0], Cuenta: CTA.CAJA_BS, Nombre: 'Caja Principal (Bs)', Concepto: `Cobro a ${selectedClient.name}`, Debe: parseFloat(payData.bs)/tasaBCV, Haber: 0 });
-        if (parseFloat(payData.banco) > 0) rows.push({ ...rows[0], Cuenta: CTA.BANCOS, Nombre: 'Bancos Nacionales', Concepto: `Cobro a ${selectedClient.name} (Ref: ${payData.ref})`, Debe: parseFloat(payData.banco)/tasaBCV, Haber: 0 });
+        if (parseFloat(payData.usd) > 0) rows.push({ ...rows[0], codigo_cuenta: CTA.CAJA_USD, cuenta_contable: 'Caja Principal ($)', concepto: `Cobro a ${selectedClient.name}`, debe_usd: parseFloat(payData.usd), haber_usd: 0 });
+        if (parseFloat(payData.bs) > 0) rows.push({ ...rows[0], codigo_cuenta: CTA.CAJA_BS, cuenta_contable: 'Caja Principal (Bs)', concepto: `Cobro a ${selectedClient.name}`, debe_usd: parseFloat(payData.bs)/tasaBCV, haber_usd: 0 });
+        if (parseFloat(payData.banco) > 0) rows.push({ ...rows[0], codigo_cuenta: CTA.BANCOS, cuenta_contable: 'Bancos Nacionales', concepto: `Cobro a ${selectedClient.name} (Ref: ${payData.ref})`, debe_usd: parseFloat(payData.banco)/tasaBCV, haber_usd: 0 });
         
-        addTransaction(rows); generateReceiptPDF(ref, selectedClient.name, totalToPayUSD, payData);
+        addTransaction(rows);
         setPayModal(false); setPayData({ usd: '', bs: '', banco: '', ref: '' }); setSelectedClient(null);
     };
 
@@ -1107,7 +1104,7 @@ const DebtModule = ({ onBack }) => {
                                 <input placeholder="Ref" className="w-24 p-4 bg-slate-50 rounded-2xl font-bold uppercase outline-none focus:border-emerald-500 border-2 border-transparent" value={payData.ref} onChange={e => setPayData({...payData, ref: e.target.value})} />
                             </div>
                         </div>
-                        <button onClick={handleProcessPayment} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black uppercase shadow-lg mb-2">Pagar y Generar Recibo</button>
+                        <button onClick={handleProcessPayment} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black uppercase shadow-lg mb-2">Pagar a Sistema</button>
                         <button onClick={() => setPayModal(false)} className="w-full py-4 font-bold text-slate-400 uppercase">Cancelar</button>
                     </div>
                 </div>
@@ -1117,9 +1114,7 @@ const DebtModule = ({ onBack }) => {
 };
 
 const ExpensesModule = ({ onBack }) => {
-    const { addTransaction, tasaBCV, journal, contacts, currentUser } = useContext(AppContext);
-    const nombreEmp = currentUser?.nombreEmpresa || NOMBRE_EMPRESA;
-    const rifEmp = currentUser?.rif || RIF_EMPRESA;
+    const { addTransaction, tasaBCV, journal, contacts } = useContext(AppContext);
     
     const expenseAccounts = useMemo(() => {
         if (typeof window !== 'undefined' && window.CHART_OF_ACCOUNTS) {
@@ -1135,7 +1130,7 @@ const ExpensesModule = ({ onBack }) => {
     const [expense, setExpense] = useState({ beneficiarioId: '', beneficiario: '', categoria: expenseAccounts[0]?.id || '', concepto: '', monto: '' });
     const [payments, setPayments] = useState({ usd: '', bs: '', banco: '', cxp: '' });
 
-    const recentExpenses = useMemo(() => journal.filter(r => String(r.Cuenta||'').startsWith('6.') && r.Debe > 0).slice(-5).reverse(), [journal]);
+    const recentExpenses = useMemo(() => journal.filter(r => String(r.codigo_cuenta||r.Cuenta||'').startsWith('6.') && (parseFloat(r.debe_usd || r.Debe) > 0)).slice(-5).reverse(), [journal]);
 
     const totalMonto = parseFloat(expense.monto) || 0;
     const totalPagado = (parseFloat(payments.usd) || 0) + ((parseFloat(payments.bs) || 0) / tasaBCV) + ((parseFloat(payments.banco) || 0) / tasaBCV) + ((parseFloat(payments.cxp) || 0) / tasaBCV);
@@ -1143,14 +1138,13 @@ const ExpensesModule = ({ onBack }) => {
 
     const handleRegistrarGasto = () => {
         if (!canProcess) return;
-
-        const date = new Date().toLocaleDateString(), time = new Date().toLocaleTimeString(), ref = `GST-${Date.now().toString().slice(-4)}`;
+        const ref = `GST-${Date.now().toString().slice(-4)}`;
         let rows = [];
 
         const accountName = expenseAccounts.find(a => a.id === expense.categoria)?.nombre || 'Gasto Operativo';
         const conceptoDetallado = `Pago a: ${expense.beneficiario} | Ref: ${ref} | ${expense.concepto}`;
 
-        rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: expense.categoria, Nombre: accountName, Concepto: conceptoDetallado, Debe: totalMonto, Haber: 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: expense.beneficiario.toUpperCase() });
+        rows.push({ codigo_cuenta: expense.categoria, cuenta_contable: accountName, concepto: conceptoDetallado, debe_usd: totalMonto, haber_usd: 0, unidad: 'monto', ref_doc: ref, entidad: expense.beneficiario.toUpperCase() });
 
         const pMap = [
             { k: 'usd', c: CTA.CAJA_USD, n: 'Caja Principal ($)' }, { k: 'bs', c: CTA.CAJA_BS, n: 'Caja Principal (Bs)' },
@@ -1160,12 +1154,12 @@ const ExpensesModule = ({ onBack }) => {
         pMap.forEach(p => {
             if (parseFloat(payments[p.k]) > 0) {
                 const montoHaber = p.k === 'usd' ? parseFloat(payments[p.k]) : (parseFloat(payments[p.k]) / tasaBCV);
-                rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: p.c, Nombre: p.n, Concepto: conceptoDetallado, Debe: 0, Haber: montoHaber, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: expense.beneficiario.toUpperCase() });
+                rows.push({ codigo_cuenta: p.c, cuenta_contable: p.n, concepto: conceptoDetallado, debe_usd: 0, haber_usd: montoHaber, unidad: 'monto', ref_doc: ref, entidad: expense.beneficiario.toUpperCase() });
             }
         });
 
-        const dif = rows.reduce((acc, r) => acc + (parseFloat(r.Debe) || 0), 0) - rows.reduce((acc, r) => acc + (parseFloat(r.Haber) || 0), 0);
-        if (Math.abs(dif) > 0.009) rows.push({ Empresa: nombreEmp, RIF: rifEmp, Fecha: date, Hora: time, Cuenta: CTA.DIF_CAMB, Nombre: 'Diferencial Cambiario', Concepto: `Ajuste Redondeo en Gasto ${ref}`, Debe: dif < 0 ? Math.abs(dif) : 0, Haber: dif > 0 ? dif : 0, Unidad_Medida: 'monto', Tasa: tasaBCV, Ref: ref, Precio_Venta: 0, Entidad: expense.beneficiario.toUpperCase() });
+        const dif = rows.reduce((acc, r) => acc + (parseFloat(r.debe_usd) || 0), 0) - rows.reduce((acc, r) => acc + (parseFloat(r.haber_usd) || 0), 0);
+        if (Math.abs(dif) > 0.009) rows.push({ codigo_cuenta: CTA.DIF_CAMB, cuenta_contable: 'Diferencial Cambiario', concepto: `Ajuste Redondeo en Gasto ${ref}`, debe_usd: dif < 0 ? Math.abs(dif) : 0, haber_usd: dif > 0 ? dif : 0, unidad: 'monto', ref_doc: ref, entidad: expense.beneficiario.toUpperCase() });
 
         addTransaction(rows);
         setExpense({ beneficiarioId: '', beneficiario: '', categoria: expenseAccounts[0]?.id || '', concepto: '', monto: '' });
@@ -1186,7 +1180,7 @@ const ExpensesModule = ({ onBack }) => {
                             <div className="space-y-1 relative">
                                 <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Buscar RIF / Cédula</label>
                                 <Icon name="Search" size={16} className="absolute left-4 top-9 text-slate-400" />
-                                <input placeholder="J-00000000" className="w-full pl-10 p-4 bg-slate-50 rounded-2xl font-bold uppercase outline-none focus:border-rose-300 border-2 border-transparent transition-all" value={expense.beneficiarioId} onChange={e => { const valor = e.target.value.toUpperCase(); setExpense({...expense, beneficiarioId: valor}); const found = providers.find(p => p.id.includes(valor) && valor.length > 3); if (found) setExpense(prev => ({...prev, beneficiario: found.name, beneficiarioId: found.id})); }} />
+                                <input placeholder="J-00000000" className="w-full pl-10 p-4 bg-slate-50 rounded-2xl font-bold uppercase outline-none focus:border-rose-300 border-2 border-transparent transition-all" value={expense.beneficiarioId} onChange={e => { const valor = e.target.value.toUpperCase(); setExpense({...expense, beneficiarioId: valor}); const found = providers.find(p => (p.id || p.rif_entidad)?.includes(valor) && valor.length > 3); if (found) setExpense(prev => ({...prev, beneficiario: found.name, beneficiarioId: found.id})); }} />
                             </div>
                             <div className="space-y-1">
                                 <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Nombre Proveedor *</label>
@@ -1211,7 +1205,7 @@ const ExpensesModule = ({ onBack }) => {
                                 <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400"><tr><th className="p-3 text-left">Ref</th><th className="p-3 text-left">Cuenta</th><th className="p-3 text-left truncate max-w-[150px]">Concepto</th><th className="p-3 text-right">Monto</th></tr></thead>
                                 <tbody className="divide-y divide-slate-50">
                                     {recentExpenses.length === 0 && <tr><td colSpan="4" className="p-6 text-center text-slate-400 italic">No hay gastos recientes</td></tr>}
-                                    {recentExpenses.map((r, i) => <tr key={i} className="hover:bg-slate-50"><td className="p-3 text-slate-500">{r.Ref}</td><td className="p-3 uppercase text-rose-600">{r.Nombre}</td><td className="p-3 truncate max-w-[150px] text-slate-600" title={r.Concepto}>{r.Concepto}</td><td className="p-3 text-right font-black">${r.Debe.toFixed(2)}</td></tr>)}
+                                    {recentExpenses.map((r, i) => <tr key={i} className="hover:bg-slate-50"><td className="p-3 text-slate-500">{r.ref_doc || r.Ref}</td><td className="p-3 uppercase text-rose-600">{r.cuenta_contable || r.Nombre}</td><td className="p-3 truncate max-w-[150px] text-slate-600">{r.concepto || r.Concepto}</td><td className="p-3 text-right font-black">${parseFloat(r.debe_usd || r.Debe).toFixed(2)}</td></tr>)}
                                 </tbody>
                             </table>
                         </div>
@@ -1241,17 +1235,17 @@ const ExpensesModule = ({ onBack }) => {
 };
 
 const ContactModule = ({ onBack }) => {
-    const { contacts, setContacts } = useContext(AppContext);
+    const { contacts, addContact } = useContext(AppContext);
     const [form, setForm] = useState({ id: '', name: '', email: '', phone: '', type: 'cliente' });
 
     const handleSave = (e) => {
         e.preventDefault();
         if (!form.id || !form.name) return alert("Cédula/RIF y Nombre son obligatorios");
         
-        const existe = contacts.find(c => c.id === form.id);
+        const existe = contacts.find(c => c.id === form.id || c.rif_entidad === form.id);
         if (existe) return alert("Este contacto ya se encuentra registrado.");
         
-        setContacts([...contacts, form]);
+        addContact(form);
         setForm({ id: '', name: '', email: '', phone: '', type: 'cliente' });
         alert("¡Contacto afiliado con éxito!");
     };
@@ -1259,7 +1253,7 @@ const ContactModule = ({ onBack }) => {
     const handleExport = () => {
         if (contacts.length === 0) return alert("No hay contactos registrados.");
         const headers = ["Cedula_RIF", "Nombre_Completo", "Tipo", "Email", "Telefono"];
-        const rows = contacts.map(c => [c.id, `"${c.name}"`, c.type.toUpperCase(), c.email, c.phone]);
+        const rows = contacts.map(c => [c.id || c.rif_entidad, `"${c.name}"`, c.type.toUpperCase(), c.email, c.phone]);
         const csvContent = [headers, ...rows].map(e => e.join(";")).join("\n");
         
         const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1312,7 +1306,7 @@ const ContactModule = ({ onBack }) => {
                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm ${c.type === 'proveedor' ? 'bg-orange-500' : 'bg-indigo-500'}`}>{c.name.charAt(0)}</div>
                                         <div>
                                             <div className="flex items-center gap-2"><p className="font-black text-sm uppercase">{c.name}</p><span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${c.type === 'proveedor' ? 'bg-orange-500/20 text-orange-400' : c.type === 'ambos' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-indigo-500/20 text-indigo-400'}`}>{c.type}</span></div>
-                                            <p className="text-[10px] text-slate-400 font-bold tracking-wider">{c.id} {c.phone && `• ${c.phone}`}</p>
+                                            <p className="text-[10px] text-slate-400 font-bold tracking-wider">{c.id || c.rif_entidad} {c.phone && `• ${c.phone}`}</p>
                                         </div>
                                     </div>
                                     {c.email && <Icon name="Mail" size={16} className="text-slate-500"/>}
@@ -1328,22 +1322,37 @@ const ContactModule = ({ onBack }) => {
 
 const InventoryModule = ({ onBack }) => {
     const { inventory } = useContext(AppContext);
+    const [search, setSearch] = useState("");
+
+    const filteredInventory = inventory.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+
     return (
         <div className="animate-in space-y-6 pb-20">
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
-                <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-xl"><Icon name="ArrowLeft"/></button>
-                <h2 className="font-black uppercase italic tracking-tighter text-xl">Stock Actual</h2>
+            <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                    <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-xl"><Icon name="ArrowLeft"/></button>
+                    <h2 className="font-black uppercase italic tracking-tighter text-xl">Stock Actual</h2>
+                </div>
+                <div className="relative">
+                    <Icon name="Search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16}/>
+                    <input type="text" placeholder="Buscar producto..." className="pl-12 pr-6 py-3 bg-slate-50 border-none rounded-2xl text-xs font-bold w-full md:w-64 focus:ring-2 focus:ring-blue-500 transition-all" value={search} onChange={e => setSearch(e.target.value)} />
+                </div>
             </div>
             <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm">
                 <table className="w-full text-sm font-bold">
-                    <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400"><tr><th className="p-6 text-left">Producto</th><th className="p-6 text-center">Existencia</th><th className="p-6 text-center">Unidad</th><th className="p-6 text-right">Precio Venta</th></tr></thead>
+                    <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
+                        <tr><th className="p-6 text-left">Producto</th><th className="p-6 text-center">Existencia</th><th className="p-6 text-center">Unidad</th><th className="p-6 text-center">Costo Prom.</th><th className="p-6 text-right">Precio Venta</th></tr>
+                    </thead>
                     <tbody className="divide-y divide-slate-50">
-                        {inventory.filter(p => p.stock > 0).map(p => (
+                        {filteredInventory.length === 0 ? (
+                            <tr><td colSpan="5" className="p-10 text-center text-slate-400 uppercase text-xs font-black">No se encontraron productos</td></tr>
+                        ) : filteredInventory.map(p => (
                             <tr key={p.id}>
                                 <td className="p-6 uppercase font-black">{p.name}</td>
-                                <td className="p-6 text-center text-blue-600">{p.stock.toFixed(p.unit === 'kg' ? 3 : 0)}</td>
+                                <td className="p-6 text-center"><span className={`px-3 py-1 rounded-full ${p.stock <= 0 ? 'bg-rose-100 text-rose-600' : 'bg-blue-100 text-blue-600'}`}>{p.stock.toFixed(p.unit === 'kg' ? 3 : 0)}</span></td>
                                 <td className="p-6 text-center uppercase text-[10px] text-slate-400">{p.unit}</td>
-                                <td className="p-6 text-right font-black">${p.sellPrice.toFixed(2)}</td>
+                                <td className="p-6 text-center text-slate-500">${p.cost.toFixed(2)}</td>
+                                <td className="p-6 text-right font-black text-slate-900">${p.sellPrice.toFixed(2)}</td>
                             </tr>
                         ))}
                     </tbody>
@@ -1358,16 +1367,16 @@ const CashCloseModule = ({ onBack }) => {
     const [fisico, setFisico] = useState({ usd: '', bs: '', banco: '' });
     const [mostrarResultados, setMostrarResultados] = useState(false);
     
-    const nombreEmp = currentUser?.nombreEmpresa || NOMBRE_EMPRESA;
+    const nombreEmp = currentUser?.nombreEmpresa || currentUser?.EMPRESA || NOMBRE_EMPRESA;
     const tema = currentUser?.colorTema || 'blue';
 
     const sistema = useMemo(() => {
         const totales = { usd: 0, bs: 0, banco: 0 };
         journal.forEach(r => {
-            const debe = parseFloat(r.Debe) || 0;
-            const haber = parseFloat(r.Haber) || 0;
-            const tasaH = parseFloat(r.Tasa) || tasaBCV;
-            const cta = String(r.Cuenta || '').trim();
+            const debe = parseFloat(r.debe_usd || r.Debe || 0);
+            const haber = parseFloat(r.haber_usd || r.Haber || 0);
+            const tasaH = parseFloat(r.tasa || r.Tasa || tasaBCV);
+            const cta = String(r.codigo_cuenta || r.Cuenta || '').trim();
 
             if (cta === CTA.CAJA_USD || cta.includes('Divisa') || cta.includes('$')) totales.usd += (debe - haber);
             if (cta === CTA.CAJA_BS || cta.includes('Bolívar') || cta.includes('Bs')) totales.bs += (debe - haber) * tasaH;
@@ -1382,27 +1391,19 @@ const CashCloseModule = ({ onBack }) => {
         const headers = ["Empresa", "RIF", "Fecha", "Cuenta", "Código", "Concepto", "Debe ($)", "Haber ($)", "Debe (Bs)", "Haber (Bs)", "Tasa", "Ref/Doc", "Cant.", "Unidad", "P. Venta", "Entidad"];
 
         const rows = (journal || []).map(entry => {
-            const tasa = parseFloat(entry.Tasa) || tasaBCV || 1;
-            const d$ = parseFloat(entry.Debe) || 0;
-            const h$ = parseFloat(entry.Haber) || 0;
+            const tasa = parseFloat(entry.tasa || entry.Tasa) || tasaBCV || 1;
+            const d$ = parseFloat(entry.debe_usd || entry.Debe) || 0;
+            const h$ = parseFloat(entry.haber_usd || entry.Haber) || 0;
             
-            let entidad = String(entry.Entidad || "GENERAL");
-            const conceptoStr = String(entry.Concepto || '');
+            let entidad = String(entry.entidad || entry.Entidad || "GENERAL");
+            const conceptoStr = String(entry.concepto || entry.Concepto || '');
 
-            if (entidad === "GENERAL" && conceptoStr) {
-                if (conceptoStr.includes("Cliente:")) entidad = conceptoStr.split("Cliente:")[1].trim();
-                else if (conceptoStr.includes("Pago a:")) entidad = conceptoStr.split("|")[0].replace("Pago a:", "").trim();
-                else if (conceptoStr.includes("Prov:")) entidad = conceptoStr.split("Prov:")[1].trim();
-            }
+            let cantidad = parseFloat(entry.cantidad || entry.Cantidad) || 0;
 
-            let cantidad = parseFloat(entry.Cantidad) || 0;
-            if (cantidad === 0 && conceptoStr.includes("Cant:")) {
-                const cantMatch = conceptoStr.match(/Cant:\s*([\d.]+)/);
-                if (cantMatch) cantidad = parseFloat(cantMatch[1]);
-            }
+            const fechaFormat = entry.fecha_local ? new Date(entry.fecha_local).toLocaleDateString() : (entry.Fecha || new Date().toLocaleDateString());
 
             return [
-                String(entry.Empresa || nombreEmp), String(entry.RIF || RIF_EMPRESA), String(entry.Fecha || ""), String(entry.Nombre || "Cuenta"), String(entry.Cuenta || "0.0.00"), conceptoStr, d$, h$, Number((d$ * tasa).toFixed(2)), Number((h$ * tasa).toFixed(2)), tasa, String(entry.Ref || ""), cantidad, String(entry.Unidad_Medida || "monto"), parseFloat(entry.Precio_Venta) || 0, entidad 
+                String(entry.empresa || entry.Empresa || nombreEmp), String(entry.rif || entry.RIF || RIF_EMPRESA), fechaFormat, String(entry.cuenta_contable || entry.Nombre || "Cuenta"), String(entry.codigo_cuenta || entry.Cuenta || "0.0.00"), conceptoStr, d$, h$, Number((d$ * tasa).toFixed(2)), Number((h$ * tasa).toFixed(2)), tasa, String(entry.ref_doc || entry.Ref || ""), cantidad, String(entry.unidad || entry.Unidad_Medida || "und"), parseFloat(entry.precio_venta || entry.Precio_Venta) || 0, entidad 
             ];
         });
 
@@ -1425,8 +1426,8 @@ const CashCloseModule = ({ onBack }) => {
             if (confirm("ADVERTENCIA: Esta acción es irreversible. ¿Seguro que ya descargaste el Libro Diario en Excel?")) {
                 setJournal([]); setTasaBCV(0); setIsLocked(false); setIsInit(false); 
                 onBack(); 
-                localStorage.removeItem('legaly_journal'); localStorage.removeItem('legaly_tasa'); localStorage.setItem('legaly_locked', 'false'); localStorage.setItem('legaly_init', 'false');
-                alert("Ciclo cerrado con éxito. Tu base de datos de contactos se mantiene segura.");
+                localStorage.removeItem('legaly_tasa'); localStorage.setItem('legaly_locked', 'false'); localStorage.setItem('legaly_init', 'false');
+                alert("Ciclo cerrado con éxito. Tu base de datos de contactos se mantiene segura en la nube.");
             }
         }
     };
@@ -1467,7 +1468,7 @@ const CashCloseModule = ({ onBack }) => {
 
                     <div className="bg-rose-50 p-8 rounded-[3rem] border border-rose-100">
                         <div className="flex items-center gap-2 mb-4"><div className="bg-rose-600 text-white p-2 rounded-lg"><Icon name="Trash2" size={16}/></div><h3 className="text-xs font-black uppercase text-rose-600">Reinicio Maestro</h3></div>
-                        <p className="text-xs text-rose-800/60 mb-6 font-medium leading-relaxed">Esta acción eliminará el Libro Diario actual y la tasa del día de la memoria. Su directorio de contactos está protegido y no será eliminado.</p>
+                        <p className="text-xs text-rose-800/60 mb-6 font-medium leading-relaxed">Esta acción eliminará el Libro Diario actual de la memoria del navegador. Sin embargo, su historial quedará resguardado en la nube y su Excel.</p>
                         <button onClick={handleNuevoCiclo} className="w-full py-5 bg-white border-2 border-rose-200 text-rose-600 rounded-2xl font-black uppercase text-xs hover:bg-rose-600 hover:text-white transition-all flex justify-center items-center gap-2 shadow-sm"><Icon name="RefreshCw" size={16}/> Iniciar Nuevo Ciclo Contable</button>
                     </div>
                 </div>

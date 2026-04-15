@@ -25,7 +25,22 @@ const USUARIOS = [
         rif: "J-00000000",
         colorTema: "emerald"
     },
-    
+    {
+        usuario: "prueba123",
+        clave: "1234",
+        rol: "USER",
+        nombreEmpresa: "COMERCIAL PRUEBA",
+        rif: "J-123456789",
+        colorTema: "yellow"
+    },
+   {
+        usuario: "armando",
+        clave: "1234",
+        rol: "USER",
+        nombreEmpresa: "SAMUEL HERRERA",
+        rif: "V-30580323",
+        colorTema: "yellow"
+    },
 ];
 
 // ==========================================
